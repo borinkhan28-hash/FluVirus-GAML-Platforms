@@ -51,12 +51,20 @@ global {
 	// disabling the school also removes children, since they have no day_place.
 	bool enable_families <- true;
 	bool enable_school <- true;
+	// The GIS city is two blocks joined by a single 125 m road across the
+	// central gap. Disabling this connector splits the road graph in two and
+	// keeps the communities epidemiologically separate.
+	bool enable_block_connector <- true;
 	float initial_vaccination_coverage <- 0.10;
 	float daily_vaccination_rate <- 0.0005;
 	float daily_mutation_probability <- 0.001;
+	// When enabled, the interactive experiment stops as soon as the last
+	// infection clears (epidemic_finished).
+	bool stop_when_epidemic_finished <- false;
 
 	// Runtime state and indicators.
 	int simulation_day -> int(cycle / cycles_per_day);
+	float simulation_time_days -> float(cycle) / cycles_per_day;
 	int hour_of_day -> int((cycle mod cycles_per_day) / cycles_per_hour);
 	int minute_of_hour -> int((cycle mod cycles_per_hour) * minutes_per_step);
 	int population_size -> length(person);
@@ -78,7 +86,16 @@ global {
 	init {
 		create road from: road_file;
 		create building from: building_file;
-		road_network <- as_edge_graph(road);
+
+		// The connector is the only road that crosses the central gap, so it is
+		// the one segment taller than the 25 m city grid. Flag it, then leave it
+		// out of the routing graph when the connector is disabled.
+		ask road {
+			is_connector <- (shape.height > 100#m) and (shape.width < 100#m);
+		}
+		road_network <- enable_block_connector
+			? as_edge_graph(road)
+			: as_edge_graph(road where !each.is_connector);
 		create sky_cloud number: 11 {
 			location <- any_location_in(shape);
 			cloud_altitude <- rnd(48#m, 76#m);
@@ -109,6 +126,12 @@ global {
 		ask home_buildings {
 			is_home <- true;
 			display_height <- rnd(6#m, 12#m);
+		}
+
+		// Split the city into two communities at the central gap (y 150-275),
+		// matching the two road blocks joined only by the connector road.
+		ask building {
+			community <- (location.y > 212#m) ? 1 : 0;
 		}
 
 		// Every residential building receives a household. With families on
@@ -144,6 +167,11 @@ global {
 					location <- any_location_in(home.shape);
 				}
 			}
+		}
+
+		// Each person belongs to the community of their home building.
+		ask person {
+			community <- home.community;
 		}
 
 		// Apply starting coverage first, then seed infections among everybody.
@@ -214,6 +242,12 @@ global {
 		peak_infected <- max([peak_infected, infected_count]);
 	}
 
+	// GUI experiments are stopped reliably by a reflex that pauses the
+	// simulation, following GAMA's official Incremental Model tutorial.
+	reflex stop_simulation when: stop_when_epidemic_finished and epidemic_finished {
+		do pause;
+	}
+
 }
 
 // Lightweight procedural clouds keep the project self-contained. Their draw
@@ -242,14 +276,22 @@ species sky_cloud {
 }
 
 species road {
+	// True for the single segment bridging the two city blocks across the
+	// central gap. A closed connector is drawn red as a visual reminder.
+	bool is_connector <- false;
+	rgb road_color <- (is_connector and !enable_block_connector)
+		? rgb(214, 69, 65) : rgb(108, 117, 125);
+
 	aspect default {
-		draw shape color: rgb(108, 117, 125) width: 2.2#m;
+		draw shape color: road_color width: 2.2#m;
 	}
 
 	// GAMA's bundled Luneray Flu and 3D GIS examples use a widened line
 	// to keep the road network readable below extruded buildings.
 	aspect three_dimensional {
-		draw line(shape.points, 2.8#m) color: rgb(65, 72, 84) depth: 0.25#m;
+		draw line(shape.points, 2.8#m)
+			color: (is_connector and !enable_block_connector) ? rgb(214, 69, 65) : rgb(65, 72, 84)
+			depth: 0.25#m;
 	}
 }
 
@@ -257,6 +299,7 @@ species building {
 	bool is_school <- false;
 	bool is_home <- false;
 	bool is_workplace <- false;
+	int community <- 0;
 	float display_height <- 8#m;
 
 	aspect default {
@@ -365,6 +408,7 @@ species person skills: [moving] {
 	// 0 = Susceptible, 1 = Infected, 2 = Recovered.
 	int health_state <- 0;
 	bool is_child <- false;
+	int community <- 0;
 	building home;
 	building day_place;
 	building current_building;
@@ -415,8 +459,11 @@ species person skills: [moving] {
 		}
 	}
 
+	// With the block connector closed, a person whose daily destination lies in
+	// the other community cannot cross and stays home instead of being stranded.
 	reflex leave_for_day when: ((cycle mod cycles_per_day) = (departure_hour * cycles_per_hour))
-		and !isolated and !travelling {
+		and !isolated and !travelling and (day_place != nil)
+		and (enable_block_connector or (day_place.community = community)) {
 		do start_trip(day_place);
 	}
 
@@ -539,11 +586,13 @@ experiment flu_city type: gui {
 	parameter "Workplace share of non-school buildings" var: workplace_building_fraction min: 0.05 max: 0.50 step: 0.05 category: "City roles";
 	parameter "Enable families" var: enable_families category: "City roles";
 	parameter "Enable school" var: enable_school category: "City roles";
+	parameter "Enable block connector road" var: enable_block_connector category: "City roles";
 	parameter "Show detailed 3D buildings" var: show_cartoon_details category: "City roles";
 	parameter "Use realistic 3D people" var: use_realistic_people_3d category: "City roles";
 	parameter "Show sky and moving clouds" var: show_sky_and_clouds category: "City roles";
 	parameter "Transmission probability per contact" var: base_infection_probability min: 0.0 max: 1.0 step: 0.01 category: "Epidemic";
 	parameter "Infectious period (days)" var: infectious_period_days min: 1 max: 30 category: "Epidemic";
+	parameter "Stop when epidemic ends" var: stop_when_epidemic_finished category: "Epidemic";
 	parameter "Enable testing and isolation" var: enable_isolation category: "Public health";
 	parameter "Daily testing rate" var: daily_testing_rate min: 0.0 max: 0.20 step: 0.005 category: "Public health";
 	parameter "Isolation duration (days)" var: isolation_period_days min: 1 max: 30 category: "Public health";
@@ -556,6 +605,7 @@ experiment flu_city type: gui {
 	output {
 		monitor "Day / time" value: string(simulation_day) + " / " + string(hour_of_day) + ":" +
 			(minute_of_hour = 0 ? "00" : string(minute_of_hour)) color: rgb(88, 96, 105);
+		monitor "Population" value: population_size color: rgb(120, 53, 15);
 		monitor "Susceptible" value: susceptible_count color: rgb(46, 160, 67);
 		monitor "Infected" value: infected_count color: rgb(218, 54, 51);
 		monitor "Recovered" value: recovered_count color: rgb(9, 105, 218);
@@ -563,6 +613,8 @@ experiment flu_city type: gui {
 		monitor "Commuting on roads" value: commuting_count color: rgb(88, 96, 105);
 		monitor "Homes / workplaces / schools" value: string(length(home_buildings)) + " / " +
 			string(length(workplace_buildings)) + " / " + (enable_school ? "1" : "0") color: rgb(72, 149, 239);
+		monitor "Block connector" value: enable_block_connector ? "open" : "closed"
+			color: enable_block_connector ? rgb(46, 160, 67) : rgb(218, 54, 51);
 		monitor "Vaccinated (%)" value: vaccinated_percent color: rgb(9, 105, 218);
 		monitor "Peak infected" value: peak_infected color: rgb(218, 54, 51);
 		monitor "Cumulative attack rate (%)" value: attack_rate color: rgb(88, 96, 105);
@@ -589,14 +641,21 @@ experiment flu_city type: gui {
 		}
 
 		display "Epidemic dashboard" type: 2d refresh: every(6#cycles) background: #white {
-			chart "SIR population through time" type: series style: spline position: {0.0, 0.0} size: {1.0, 0.62} {
-				data "Susceptible" value: susceptible_count color: rgb(46, 160, 67);
-				data "Infected" value: infected_count color: rgb(218, 54, 51);
-				data "Recovered" value: recovered_count color: rgb(9, 105, 218);
+			chart "SIR population through time" type: xy style: spline
+				x_label: "Simulation day" x_tick_unit: 1.0 position: {0.0, 0.0} size: {1.0, 0.62} {
+				data "Susceptible" value: {simulation_time_days, susceptible_count}
+					accumulate_values: true color: rgb(46, 160, 67);
+				data "Infected" value: {simulation_time_days, infected_count}
+					accumulate_values: true color: rgb(218, 54, 51);
+				data "Recovered" value: {simulation_time_days, recovered_count}
+					accumulate_values: true color: rgb(9, 105, 218);
 			}
-			chart "Public-health response" type: series style: spline position: {0.0, 0.64} size: {1.0, 0.36} {
-				data "Isolated" value: isolated_count color: rgb(137, 87, 229);
-				data "Vaccinated" value: vaccinated_count color: rgb(191, 135, 0);
+			chart "Public-health response" type: xy style: spline
+				x_label: "Simulation day" x_tick_unit: 1.0 position: {0.0, 0.64} size: {1.0, 0.36} {
+				data "Isolated" value: {simulation_time_days, isolated_count}
+					accumulate_values: true color: rgb(137, 87, 229);
+				data "Vaccinated" value: {simulation_time_days, vaccinated_count}
+					accumulate_values: true color: rgb(191, 135, 0);
 			}
 		}
 	}
