@@ -9,10 +9,13 @@
 model FluVirus
 
 global {
-	// Ten-minute cycles keep road travel visible instead of teleporting agents.
-	float step <- 10#mn;
-	int cycles_per_hour <- 6;
-	int cycles_per_day <- 144;
+	// Faster clock: one cycle is 30 simulated minutes instead of 10, so a day
+	// takes 48 cycles instead of 144 (3x fewer steps for the same number of days).
+	// Edit minutes_per_step only; the derived values follow automatically.
+	int minutes_per_step <- 30;
+	float step <- minutes_per_step * 1#mn;
+	int cycles_per_hour <- 60 / minutes_per_step;
+	int cycles_per_day <- 24 * cycles_per_hour;
 
 	// GIS inputs bundled with this project.
 	file road_file <- file("../includes/road_environment.shp");
@@ -25,6 +28,7 @@ global {
 	float workplace_building_fraction <- 0.25;
 	bool show_cartoon_details <- true;
 	bool use_realistic_people_3d <- true;
+	bool show_sky_and_clouds <- true;
 
 	// Core epidemiological assumptions from the assignment.	
 	float base_infection_probability <- 0.33;
@@ -43,6 +47,10 @@ global {
 	bool enable_isolation <- true;
 	bool enable_vaccination <- true;
 	bool enable_variants <- true;
+	// City-structure extensions. Disabling families spawns one adult per home;
+	// disabling the school also removes children, since they have no day_place.
+	bool enable_families <- true;
+	bool enable_school <- true;
 	float initial_vaccination_coverage <- 0.10;
 	float daily_vaccination_rate <- 0.0005;
 	float daily_mutation_probability <- 0.001;
@@ -50,7 +58,7 @@ global {
 	// Runtime state and indicators.
 	int simulation_day -> int(cycle / cycles_per_day);
 	int hour_of_day -> int((cycle mod cycles_per_day) / cycles_per_hour);
-	int minute_of_hour -> int((cycle mod cycles_per_hour) * 10);
+	int minute_of_hour -> int((cycle mod cycles_per_hour) * minutes_per_step);
 	int population_size -> length(person);
 	int susceptible_count -> length(person where (each.health_state = 0));
 	int infected_count -> length(person where (each.health_state = 1));
@@ -71,15 +79,24 @@ global {
 		create road from: road_file;
 		create building from: building_file;
 		road_network <- as_edge_graph(road);
+		create sky_cloud number: 11 {
+			location <- any_location_in(shape);
+			cloud_altitude <- rnd(48#m, 76#m);
+			cloud_size <- rnd(10#m, 18#m);
+			drift_speed <- rnd(0.025#m, 0.065#m);
+		}
 
 		// Building-role logic follows the separated-role reference model:
 		// one school, a configurable workplace group, and family homes.
-		school <- building with_max_of (each.shape.area);
-		ask school {
-			is_school <- true;
-			display_height <- 20#m;
+		if enable_school {
+			school <- building with_max_of (each.shape.area);
+			ask school {
+				is_school <- true;
+				display_height <- 20#m;
+			}
 		}
-		list<building> available_buildings <- building where (each != school);
+		list<building> available_buildings <- (school = nil) ? building
+			: (building where (each != school));
 		int workplace_count <- int(length(available_buildings) * workplace_building_fraction);
 		workplace_count <- max([1, workplace_count]);
 		workplace_count <- min([workplace_count, length(available_buildings) - 1]);
@@ -94,26 +111,38 @@ global {
 			display_height <- rnd(6#m, 12#m);
 		}
 
-		// Every residential building receives one family of 3-6 people
-		// with 0-2 children. Adults work; children attend the school.
+		// Every residential building receives a household. With families on
+		// this is 3-6 people (0-2 children); adults work and children attend
+		// the school. With families off, one independent adult lives per home.
 		ask home_buildings {
 			int family_size <- rnd(3, 6);
-			int child_count <- rnd(0, min([2, family_size - 1]));
+			int child_count <- (enable_families and enable_school)
+				? rnd(0, min([2, family_size - 1])) : 0;
 
-			create person number: child_count {
-				home <- myself;
-				is_child <- true;
-				day_place <- school;
-				current_building <- home;
-				location <- any_location_in(home.shape);
-			}
+			if enable_families {
+				create person number: child_count {
+					home <- myself;
+					is_child <- true;
+					day_place <- school;
+					current_building <- home;
+					location <- any_location_in(home.shape);
+				}
 
-			create person number: family_size - child_count {
-				home <- myself;
-				is_child <- false;
-				day_place <- one_of(workplace_buildings);
-				current_building <- home;
-				location <- any_location_in(home.shape);
+				create person number: family_size - child_count {
+					home <- myself;
+					is_child <- false;
+					day_place <- one_of(workplace_buildings);
+					current_building <- home;
+					location <- any_location_in(home.shape);
+				}
+			} else {
+				create person number: 1 {
+					home <- myself;
+					is_child <- false;
+					day_place <- one_of(workplace_buildings);
+					current_building <- home;
+					location <- any_location_in(home.shape);
+				}
 			}
 		}
 
@@ -187,6 +216,31 @@ global {
 
 }
 
+// Lightweight procedural clouds keep the project self-contained. Their draw
+// position drifts gently across the map while their agent location stays fixed.
+species sky_cloud {
+	float cloud_altitude <- 60#m;
+	float cloud_size <- 14#m;
+	float drift_speed <- 0.04#m;
+
+	aspect three_dimensional {
+		float cloud_x <- (location.x + cycle * drift_speed) mod world.shape.width;
+		point cloud_center <- {cloud_x, location.y, cloud_altitude};
+		rgb cloud_white <- rgb(255, 255, 255, 218);
+		draw sphere(cloud_size * 0.52) at: cloud_center
+			color: cloud_white lighted: true;
+		draw sphere(cloud_size * 0.42)
+			at: {cloud_x - cloud_size * 0.38, location.y, cloud_altitude - cloud_size * 0.08}
+			color: cloud_white lighted: true;
+		draw sphere(cloud_size * 0.46)
+			at: {cloud_x + cloud_size * 0.38, location.y, cloud_altitude - cloud_size * 0.06}
+			color: cloud_white lighted: true;
+		draw sphere(cloud_size * 0.34)
+			at: {cloud_x, location.y + cloud_size * 0.28, cloud_altitude - cloud_size * 0.12}
+			color: rgb(235, 242, 247, 205) lighted: true;
+	}
+}
+
 species road {
 	aspect default {
 		draw shape color: rgb(108, 117, 125) width: 2.2#m;
@@ -218,6 +272,7 @@ species building {
 			: (is_workplace ? rgb(239, 71, 111) : rgb(72, 202, 228));
 		rgb border_color <- is_school ? rgb(176, 123, 0)
 			: (is_workplace ? rgb(145, 37, 77) : rgb(16, 112, 138));
+		float detail_width <- min([10#m, max([4#m, shape.width * 0.42])]);
 		draw shape color: facade_color border: border_color depth: display_height lighted: true;
 
 		// Small procedural landmarks make each role readable as a cartoon
@@ -228,6 +283,19 @@ species building {
 				draw pyramid(9#m) scaled_by {1.35, 1.0, 0.42}
 					at: {location.x, location.y, display_height}
 					color: rgb(244, 124, 85) border: rgb(159, 68, 47) lighted: true;
+				// Dark timber door, warm windows, and chimney add a lived-in scale.
+				draw cube(2.2#m) scaled_by {0.75, 0.18, 1.45}
+					at: {location.x, location.y - detail_width * 0.48, 1.6#m}
+					color: rgb(105, 67, 48) border: rgb(69, 43, 31) lighted: true;
+				draw cube(1.7#m) scaled_by {1.0, 0.14, 0.72}
+					at: {location.x - 2.3#m, location.y - detail_width * 0.49, 3.0#m}
+					color: rgb(255, 229, 153) border: #white lighted: false;
+				draw cube(1.7#m) scaled_by {1.0, 0.14, 0.72}
+					at: {location.x + 2.3#m, location.y - detail_width * 0.49, 3.0#m}
+					color: rgb(255, 229, 153) border: #white lighted: false;
+				draw cylinder(0.55#m, 3.4#m)
+					at: {location.x + 2.5#m, location.y, display_height + 2.0#m}
+					color: rgb(125, 77, 60) lighted: true;
 			}
 			if is_workplace {
 				// A bright rooftop service block and antenna identify office towers.
@@ -237,6 +305,18 @@ species building {
 				draw cylinder(0.45#m, 5#m)
 					at: {location.x, location.y, display_height + 4.0#m}
 					color: rgb(78, 57, 86) lighted: true;
+				// Reflective glass bands and a sheltered lobby modernize the offices.
+				loop floor over: [0.28, 0.50, 0.72] {
+					draw cube(detail_width) scaled_by {1.0, 0.08, 0.12}
+						at: {location.x, location.y - detail_width * 0.52, display_height * floor}
+						color: rgb(117, 205, 230) border: rgb(226, 247, 255) lighted: false;
+				}
+				draw cube(4.0#m) scaled_by {1.2, 0.75, 0.55}
+					at: {location.x, location.y - detail_width * 0.55, 1.2#m}
+					color: rgb(50, 77, 103) border: rgb(194, 229, 239) lighted: true;
+				draw cube(5.5#m) scaled_by {1.25, 0.9, 0.10}
+					at: {location.x, location.y - detail_width * 0.62, 3.4#m}
+					color: rgb(238, 245, 249) border: rgb(145, 37, 77) lighted: true;
 			}
 			if is_school {
 				// The school gets a central clock-tower silhouette and blue roof.
@@ -249,6 +329,22 @@ species building {
 				draw sphere(1.25#m)
 					at: {location.x, location.y, display_height + 4.0#m}
 					color: #white border: rgb(56, 78, 98) lighted: true;
+				// A blue entrance canopy, columns, and flag make the civic role clear.
+				draw cube(5.0#m) scaled_by {1.5, 0.65, 0.12}
+					at: {location.x, location.y - detail_width * 0.58, 4.4#m}
+					color: rgb(56, 132, 196) border: rgb(28, 79, 121) lighted: true;
+				draw cylinder(0.38#m, 4.2#m)
+					at: {location.x - 2.4#m, location.y - detail_width * 0.52, 2.1#m}
+					color: rgb(246, 246, 238) lighted: true;
+				draw cylinder(0.38#m, 4.2#m)
+					at: {location.x + 2.4#m, location.y - detail_width * 0.52, 2.1#m}
+					color: rgb(246, 246, 238) lighted: true;
+				draw cylinder(0.20#m, 11#m)
+					at: {location.x + 6.0#m, location.y, 5.5#m}
+					color: rgb(90, 96, 104) lighted: true;
+				draw triangle(2.8#m)
+					at: {location.x + 7.2#m, location.y, 10.0#m}
+					color: rgb(225, 45, 55) border: rgb(142, 25, 31) lighted: false;
 			}
 		}
 
@@ -276,7 +372,8 @@ species person skills: [moving] {
 	point travel_target <- nil;
 	bool travelling <- false;
 	rgb clothing_color <- rnd_color(220);
-	// Scaled walking speed gives several visible frames on the compact 500m GIS map.
+	// Scaled walking speed for the compact 500m GIS map. With the 30-minute
+	// step a commute usually completes in one or two cycles.
 
 	int infection_start_day <- -1;
 	int active_variant <- -1;
@@ -408,8 +505,8 @@ species person skills: [moving] {
 		point halo_location <- {location.x, location.y, marker_z + human_size * 0.78};
 		point status_location <- {location.x, location.y, marker_z + human_size * 1.55};
 
-		// A pyramid torso plus spherical head gives agents a readable cartoon
-		// person silhouette. The halo preserves intervention information.
+		// Intervention halos remain visible around both realistic and cartoon
+		// people, so isolation and vaccination are readable in the 3D view.
 		if isolated {
 			draw sphere(human_size * 0.72) at: halo_location
 				color: rgb(145, 92, 246) wireframe: true lighted: true;
@@ -440,8 +537,11 @@ experiment flu_city type: gui {
 	parameter "Initial infected people" var: initially_infected min: 1 max: 100 category: "Epidemic";
 	parameter "Maximum contacts per event" var: max_contacts_per_event min: 1 max: 50 category: "Epidemic";
 	parameter "Workplace share of non-school buildings" var: workplace_building_fraction min: 0.05 max: 0.50 step: 0.05 category: "City roles";
-	parameter "Show cartoon building details" var: show_cartoon_details category: "City roles";
+	parameter "Enable families" var: enable_families category: "City roles";
+	parameter "Enable school" var: enable_school category: "City roles";
+	parameter "Show detailed 3D buildings" var: show_cartoon_details category: "City roles";
 	parameter "Use realistic 3D people" var: use_realistic_people_3d category: "City roles";
+	parameter "Show sky and moving clouds" var: show_sky_and_clouds category: "City roles";
 	parameter "Transmission probability per contact" var: base_infection_probability min: 0.0 max: 1.0 step: 0.01 category: "Epidemic";
 	parameter "Infectious period (days)" var: infectious_period_days min: 1 max: 30 category: "Epidemic";
 	parameter "Enable testing and isolation" var: enable_isolation category: "Public health";
@@ -462,7 +562,7 @@ experiment flu_city type: gui {
 		monitor "Isolated" value: isolated_count color: rgb(137, 87, 229);
 		monitor "Commuting on roads" value: commuting_count color: rgb(88, 96, 105);
 		monitor "Homes / workplaces / schools" value: string(length(home_buildings)) + " / " +
-			string(length(workplace_buildings)) + " / 1" color: rgb(72, 149, 239);
+			string(length(workplace_buildings)) + " / " + (enable_school ? "1" : "0") color: rgb(72, 149, 239);
 		monitor "Vaccinated (%)" value: vaccinated_percent color: rgb(9, 105, 218);
 		monitor "Peak infected" value: peak_infected color: rgb(218, 54, 51);
 		monitor "Cumulative attack rate (%)" value: attack_rate color: rgb(88, 96, 105);
@@ -470,12 +570,19 @@ experiment flu_city type: gui {
 
 		layout #split;
 
-		display "3D Flu City" type: 3d background: rgb(232, 244, 248) antialias: true {
-			light #ambient intensity: 110;
-			light #default intensity: 190 direction: {0.5, 0.5, -1.0};
+		display "3D Flu City" type: 3d background: rgb(112, 184, 230) antialias: true axes: false {
+			light #ambient intensity: 125;
+			light #default intensity: 205 direction: {0.35, 0.45, -1.0};
 			graphics "Ground" refresh: false {
-				draw shape color: rgb(221, 235, 226);
+				draw shape color: rgb(190, 218, 184);
+				// A stylized sun provides a warm visual focal point above the city.
+				if show_sky_and_clouds {
+					draw sphere(8#m)
+						at: {world.shape.width * 0.86, world.shape.height * 0.13, 82#m}
+						color: rgb(255, 221, 87) lighted: false;
+				}
 			}
+			species sky_cloud aspect: three_dimensional visible: show_sky_and_clouds;
 			species road aspect: three_dimensional refresh: false;
 			species building aspect: three_dimensional refresh: false;
 			species person aspect: three_dimensional;

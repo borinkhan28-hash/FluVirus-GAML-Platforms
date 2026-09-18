@@ -41,6 +41,7 @@ FluVirus/
 |- models/
 |  `- FluVirus.gaml
 |- includes/
+|  |- people.obj
 |  |- building_environment.shp
 |  |- building_environment.dbf
 |  |- building_environment.shx
@@ -96,17 +97,24 @@ The model implements the project specification as follows:
 
 The experiment opens two main views:
 
-- `3D Flu City` shows extruded homes, workplaces, the school, roads, and animated people.
+- `3D Flu City` shows a landscaped city under a blue sky, moving clouds, a sun,
+  detailed homes, workplaces, the school, roads, and animated people.
 - `Epidemic dashboard` shows SIR curves and public-health intervention curves.
 
 The 3D city uses native GAMA rendering rather than an external graphics
 library. Drag to rotate the scene, scroll to zoom, and use the display toolbar
 to reset the camera when needed.
 
-With **Show cartoon building details** enabled, homes receive pitched orange
-roofs, workplaces receive rooftop service blocks and antennas, and the school
-receives a blue-roofed central clock tower. People are rendered as small
-pyramid-and-sphere characters rather than simple dots. These decorations are
+With **Show detailed 3D buildings** enabled, homes receive pitched orange
+roofs, glowing windows, doors, and chimneys; workplaces receive glass window
+bands, entrance canopies, rooftop service blocks, and antennas; and the school
+receives a columned entrance, flagpole, and blue-roofed central clock tower.
+The **Show sky and moving clouds** option adds a blue atmosphere, stylized sun,
+and eleven softly shaded cloud groups that drift slowly across the city. With
+**Use realistic 3D people** enabled, each person is rendered with the human mesh
+in `includes/people.obj`.
+Adults and children use different scales, agents rotate toward their movement
+heading, and clothing receives an individual color. These decorations are
 visual only and do not change the GIS footprint, destination, or epidemic
 logic.
 
@@ -118,15 +126,15 @@ bundled with GAMA 2025.6.4:
 - **Building Elevation** — extrudes building shapefile polygons with the
   `depth:` facet and uses a lit 3D display;
 - **Luneray Flu, Model 6** — combines 3D GIS buildings, road geometry, and
-  animated people in a flu model;
+  animated OBJ human models in a flu simulation;
 - **Incremental Model 7** — renders health-colored people as spheres above
   extruded buildings;
 - **Road Traffic, Movement of People** — constrains `goto` movement with
   `on: road_network`.
 
-These examples are available inside GAMA under **Library models**. The model
-uses only native GAML shapes and lighting, so no extra plugin or downloaded
-asset is required.
+These examples are available inside GAMA under **Library models**. The project
+packages its human OBJ mesh in `includes/people.obj` and otherwise uses native
+GAML shapes and lighting, so no extra plugin or download is required.
 
 ### Automated test
 
@@ -655,17 +663,18 @@ The interactive experiment shows:
 
 | Appearance | Meaning |
 |---|---|
-| Green person | Susceptible. |
-| Red person | Infected. |
-| Blue person | Recovered. |
+| Green beacon above person | Susceptible. |
+| Red beacon above person | Infected. |
+| Blue beacon above person | Recovered. |
 | Purple outline | Isolated. |
 | White outline | Vaccinated and not isolated. |
-| Small marker | Child. |
-| Larger marker | Adult. |
+| Smaller human model | Child. |
+| Larger human model | Adult. |
 | Gold building with blue clock tower | School. |
 | Cyan building with orange pitched roof | Family home. |
 | Pink tower with rooftop block and antenna | Workplace. |
 | Dark gray line | Road. |
+| Blue background, yellow sun, white clouds | Procedural sky and atmosphere. |
 
 Isolation has visual priority over vaccination: an isolated vaccinated person
 uses the purple isolation outline.

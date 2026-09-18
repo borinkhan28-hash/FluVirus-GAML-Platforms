@@ -1,6 +1,6 @@
 # Blender v2.56 (sub 0) OBJ File: 'trainingdummy.blend'
 # www.blender.org
-mtllib trainingdummy.mtl
+# Material reference removed: the GAML model supplies each agent's color.
 o HumanMale_meHumanMale.001
 v 0.686933 0.794724 -0.037153
 v 0.679628 0.754811 -0.037968
@@ -1068,7 +1068,6 @@ vt 0.790491 0.735803
 vt 0.798803 0.737573
 vt 0.975493 0.869524
 vt 0.993149 0.873905
-usemtl Material.004
 s 1
 f 1/1 3/2 4/3 2/4
 f 7/5 8/6 9/7 10/8
